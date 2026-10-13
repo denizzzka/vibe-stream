@@ -39,6 +39,10 @@ jobs:
               if: runner.os == 'Linux'
               run: sudo apt-get update && sudo apt-get install -y microsocks
 
+            - name: Verify proxy servers installed
+              if: runner.os == 'Linux'
+              run: command -v microsocks
+
             - name: Run tests
               env:
                 DC: ${{matrix.dc}}
