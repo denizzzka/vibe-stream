@@ -22,10 +22,6 @@ import core.time : Duration;
 @safe:
 
 
-interface Socks5Stream : ConnectionStream {
-}
-
-
 /**
 	Creates a SOCKS5 tunnel within an existing stream.
 
@@ -44,13 +40,13 @@ interface Socks5Stream : ConnectionStream {
 		username = Optional user name (enables RFC 1929 username/password authentication)
 		password = Optional password (enables RFC 1929 username/password authentication)
 	Returns:
-		A `Socks5Stream` that is tunneled through the proxy.
+		A `ConnectionStream` that is tunneled through the proxy.
 */
-Socks5Stream createSocks5Stream(Stream)(Stream underlying, string host, ushort port,
+ConnectionStream createSocks5Stream(Stream)(Stream underlying, string host, ushort port,
 	string username = null, string password = null)
 	if (isStream!Stream)
 {
-	return new Socks5StreamImpl(interfaceProxy!ConnectionStream(underlying), host, port, username, password);
+	return new Socks5Stream(interfaceProxy!ConnectionStream(underlying), host, port, username, password);
 }
 
 
@@ -68,7 +64,7 @@ private enum Socks5Code : ubyte {
 }
 
 
-private final class Socks5StreamImpl : Socks5Stream {
+private final class Socks5Stream : ConnectionStream {
 @safe:
 
 	private InterfaceProxy!ConnectionStream m_connection;
