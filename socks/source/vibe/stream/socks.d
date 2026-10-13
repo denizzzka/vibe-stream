@@ -27,45 +27,11 @@ interface Socks5Stream : ConnectionStream {
 
 
 /**
-	Establishes a connection to the given host/port through a SOCKS5 proxy.
+	Creates a SOCKS5 tunnel within an existing stream.
 
 	The destination host name is passed to the proxy unchanged, so that the
 	proxy performs the DNS resolution of the destination on its side. If
 	`host` is an IP address literal, it is sent to the proxy as such.
-
-	Params:
-		proxy_addr = Address of the SOCKS5 proxy server (must include the port)
-		host = Host name or IP address of the destination
-		port = Port of the destination
-		username = Optional user name (enables RFC 1929 username/password authentication)
-		password = Optional password (enables RFC 1929 username/password authentication)
-		bind_address = Local address to bind the connection to
-		timeout = Timeout for establishing the TCP connection and for the SOCKS5 handshake
-	Returns:
-		A `TCPConnection` that is tunneled through the proxy.
-*/
-TCPConnection connectTCPSocks5(NetworkAddress proxy_addr, string host, ushort port,
-	string username = null, string password = null, NetworkAddress bind_address = anyAddress,
-	Duration timeout = Duration.max)
-{
-	enforce(proxy_addr.family == AddressFamily.INET || proxy_addr.family == AddressFamily.INET6,
-		"SOCKS5 proxy address must be an IPv4 or IPv6 address.");
-	enforce(proxy_addr.port != 0, "SOCKS5 proxy port must not be zero.");
-
-	auto conn = connectTCP(proxy_addr, bind_address, timeout);
-	scope (failure) conn.close();
-
-	auto previous_timeout = conn.readTimeout;
-	conn.readTimeout = timeout;
-	scope (exit) conn.readTimeout = previous_timeout;
-
-	socks5Handshake(interfaceProxy!(.Stream)(conn), host, port, username, password);
-
-	return conn;
-}
-
-/**
-	Creates a SOCKS5 tunnel within an existing stream.
 
 	The handshake is performed immediately when the stream is created, so that
 	the returned stream can be used as a regular connection stream to the

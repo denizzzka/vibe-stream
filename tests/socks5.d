@@ -13,7 +13,11 @@ import vibe.stream.socks;
 void testRoundtrip(NetworkAddress proxy, string host, ushort target_port,
 	string username = null, string password = null)
 {
-	auto conn = connectTCPSocks5(proxy, host, target_port, username, password, anyAddress, 10.seconds);
+	auto tcp = connectTCP(proxy, anyAddress, 10.seconds);
+	scope(exit) tcp.close();
+	tcp.readTimeout = 10.seconds;
+
+	auto conn = createSocks5Stream(tcp, host, target_port, username, password);
 	scope(exit) conn.close();
 
 	ubyte[4] request = [1, 2, 3, 4];
@@ -66,7 +70,10 @@ void main()
 		closed_port = tmp.bindAddress.port;
 		tmp.stopListening();
 	}
-	assertThrown(connectTCPSocks5(proxy, "127.0.0.1", closed_port, null, null, anyAddress, 10.seconds),
+	auto tcp = connectTCP(proxy, anyAddress, 10.seconds);
+	scope(exit) tcp.close();
+	tcp.readTimeout = 10.seconds;
+	assertThrown(createSocks5Stream(tcp, "127.0.0.1", closed_port),
 		"Expected connecting to an unreachable target to fail.");
 
 	logInfo("SOCKS5 test finished successfully.");
