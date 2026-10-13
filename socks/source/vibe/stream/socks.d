@@ -10,6 +10,8 @@
 module vibe.stream.socks;
 
 import vibe.core.net;
+import vibe.core.stream;
+import vibe.internal.interfaceproxy : InterfaceProxy, interfaceProxy;
 
 import std.exception : enforce;
 import std.format : format;
@@ -18,6 +20,10 @@ import std.socket : AddressFamily;
 import core.time : Duration;
 
 @safe:
+
+
+interface Socks5Stream : ConnectionStream {
+}
 
 
 /**
@@ -53,9 +59,32 @@ TCPConnection connectTCPSocks5(NetworkAddress proxy_addr, string host, ushort po
 	conn.readTimeout = timeout;
 	scope (exit) conn.readTimeout = previous_timeout;
 
-	socks5Handshake(conn, host, port, username, password);
+	socks5Handshake(interfaceProxy!(.Stream)(conn), host, port, username, password);
 
 	return conn;
+}
+
+/**
+	Creates a SOCKS5 tunnel within an existing stream.
+
+	The handshake is performed immediately when the stream is created, so that
+	the returned stream can be used as a regular connection stream to the
+	destination.
+
+	Params:
+		underlying = The base stream which is used for the SOCKS5 tunnel
+		host = Host name or IP address of the destination
+		port = Port of the destination
+		username = Optional user name (enables RFC 1929 username/password authentication)
+		password = Optional password (enables RFC 1929 username/password authentication)
+	Returns:
+		A `Socks5Stream` that is tunneled through the proxy.
+*/
+Socks5Stream createSocks5Stream(Stream)(Stream underlying, string host, ushort port,
+	string username = null, string password = null)
+	if (isStream!Stream)
+{
+	return new Socks5StreamImpl(interfaceProxy!ConnectionStream(underlying), host, port, username, password);
 }
 
 
@@ -72,7 +101,43 @@ private enum Socks5Code : ubyte {
 	AddrIPv6 = 0x04,
 }
 
-private void socks5Handshake(TCPConnection conn, string host, ushort port, string username, string password)
+
+private final class Socks5StreamImpl : Socks5Stream {
+@safe:
+
+	private InterfaceProxy!ConnectionStream m_connection;
+
+	this(InterfaceProxy!ConnectionStream connection, string host, ushort port, string username, string password)
+	{
+		socks5Handshake(interfaceProxy!Stream(connection), host, port, username, password);
+		m_connection = connection;
+	}
+
+	@property bool empty() { return m_connection.empty; }
+	@property ulong leastSize() { return m_connection.leastSize; }
+	@property bool dataAvailableForRead() { return m_connection.dataAvailableForRead; }
+	const(ubyte)[] peek() { return m_connection.peek(); }
+
+	size_t read(scope ubyte[] dst, IOMode mode) { return m_connection.read(dst, mode); }
+
+	size_t write(scope const(ubyte)[] bytes, IOMode mode) { return m_connection.write(bytes, mode); }
+
+	void flush() { m_connection.flush(); }
+	void finalize() { m_connection.finalize(); }
+	bool waitForData(Duration timeout = Duration.max) { return m_connection.waitForData(timeout); }
+
+	@property bool connected() const { return cast(bool)m_connection; }
+
+	void close()
+	{
+		auto connection = m_connection;
+		m_connection = InterfaceProxy!ConnectionStream.init;
+		if (cast(bool)connection) connection.close();
+	}
+}
+
+
+private void socks5Handshake(InterfaceProxy!Stream stream, string host, ushort port, string username, string password)
 {
 	enforce(host.length > 0, "Destination host name must not be empty.");
 	enforce(host.length <= 255, "Destination host name is too long for SOCKS5.");
@@ -80,10 +145,10 @@ private void socks5Handshake(TCPConnection conn, string host, ushort port, strin
 	ubyte[] methods = username.length
 		? [Socks5Code.Version, ubyte(2), Socks5Code.AuthUserPass, Socks5Code.AuthNone]
 		: [Socks5Code.Version, ubyte(1), Socks5Code.AuthNone];
-	conn.write(methods);
+	stream.write(methods);
 
 	ubyte[2] method_reply;
-	conn.read(method_reply[]);
+	stream.read(method_reply[]);
 	enforce(method_reply[0] == Socks5Code.Version, "Invalid version in SOCKS5 method selection reply.");
 
 	if (method_reply[1] == Socks5Code.AuthUserPass) {
@@ -98,10 +163,10 @@ private void socks5Handshake(TCPConnection conn, string host, ushort port, strin
 		auth[2 .. 2 + username.length] = cast(const(ubyte)[])username;
 		auth[2 + username.length] = cast(ubyte)password.length;
 		auth[3 + username.length .. $] = cast(const(ubyte)[])password;
-		conn.write(auth);
+		stream.write(auth);
 
 		ubyte[2] auth_reply;
-		conn.read(auth_reply[]);
+		stream.read(auth_reply[]);
 		enforce(auth_reply[0] == Socks5Code.UserPassVersion, "Invalid version in SOCKS5 authentication reply.");
 		enforce(auth_reply[1] == Socks5Code.RepSuccess, "SOCKS5 proxy authentication failed.");
 	} else {
@@ -140,10 +205,10 @@ private void socks5Handshake(TCPConnection conn, string host, ushort port, strin
 	}
 	request[n++] = cast(ubyte)(port >> 8);
 	request[n++] = cast(ubyte)(port & 0xFF);
-	conn.write(request[0 .. n]);
+	stream.write(request[0 .. n]);
 
 	ubyte[4] reply;
-	conn.read(reply[]);
+	stream.read(reply[]);
 	enforce(reply[0] == Socks5Code.Version, "Invalid version in SOCKS5 reply.");
 	enforce(reply[1] == Socks5Code.RepSuccess, format("SOCKS5 proxy failed to connect to %s:%s: %s",
 		host, port, socks5ReplyDescription(reply[1])));
@@ -157,19 +222,19 @@ private void socks5Handshake(TCPConnection conn, string host, ushort port, strin
 
 		case Socks5Code.AddrIPv4:
 			ubyte[4 + 2] addr;
-			conn.read(addr[]);
+			stream.read(addr[]);
 			break;
 
 		case Socks5Code.AddrIPv6:
 			ubyte[16 + 2] addr;
-			conn.read(addr[]);
+			stream.read(addr[]);
 			break;
 
 		case Socks5Code.AddrDomain:
 			ubyte[1] len;
-			conn.read(len[]);
+			stream.read(len[]);
 			auto addr = new ubyte[len[0] + 2];
-			conn.read(addr);
+			stream.read(addr);
 			break;
 	}
 }
